@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="height=device-height, initial-scale=1.0, user-scalable=0" minimal-ui/>
+        <title>虚拟手柄</title>
+        <style>
+            * {
+                -webkit-touch-callout: none;
+                -webkit-user-select: none;
+                -khtml-user-select: none;
+                -moz-user-select: none;
+                -ms-user-select: none;
+                user-select: none;
+            }
+            html,
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+                width: 100%;
+                background: #000;
+                /* overflow: hidden; */
+            }
+
+            #game-shot {
+                position: relative;
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+            }
+
+            .container {
+                height: 100%;
+                width: 100%;
+            }
+
+            #tip {
+                position: absolute;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                width: 200px;
+                text-align: center;
+                left: 50%;
+                color: #fff;
+                font-size: 24px;
+            }
+
+            @media (orientation: portrait) {
+                #game-shot {
+                    transform: rotate(90deg);
+                    transform-origin: 0% 0%;
+                    left: 100vw;
+                    top: 0;
+                }
+                #tip {
+                    transform: rotate(90deg) translate(-50%, -50%);
+                    transform-origin: 0% 0%;
+                }
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="container">
+            <img id="game-shot" src="./src/images/test.jpg" width=""/>
+            <div id="tip"></div>
+        </div>
+
+        <script>
+            var ws, ws_mes;
+            var timer, closerTimer;
+            var firstTimeFlag = true;
+            var naturalHeight = 1080;
+            var naturalWidth = 1920;
+            var blobURL;
+
+            openWebSocket(getQueryVariable("vmip"), getQueryVariable("vmport"), getQueryVariable("authtoken"));
+            keepFullWin();
+            document.querySelector(".container").addEventListener("touchstart", touchDown);
+            document.querySelector(".container").addEventListener("touchmove", throttle(posCatching, 20));
+            document.querySelector(".container").addEventListener("touchend", touchup);
+
+            function keepFullWin() {
+                setInterval(() => {
+                    var mql = window.matchMedia("(orientation: portrait)");
+                    if (mql.matches) {
+                        document.querySelector("#game-shot").style.height = window.innerWidth + "px";
+                        document.querySelector("#game-shot").style.width = window.innerHeight + "px";
+                    } else {
+                        document.querySelector("#game-shot").style.height = window.innerHeight + "px";
+                        document.querySelector("#game-shot").style.width = window.innerWidth + "px";
+                    }
+                }, 1000);
+            }
+
+            function posCatching(e) {
+                var position = new Array(2);
+                for (var i = 0; i < e.changedTouches.length; i++) {
+                    position = posMapping([e.changedTouches[i].pageX, e.changedTouches[i].pageY]);
+                    sendMessage("move", i, position);
+                }
+                console.log(position);
+            }
+
+            function posMapping(pos) {
+                var mql = window.matchMedia("(orientation: portrait)");
+                if (mql.matches) {
+                    //设备竖向
+                    var trueWidth = window.innerHeight;
+                    var trueHeight = window.innerWidth;
+
+                    if (trueHeight / naturalHeight < trueWidth / naturalWidth) {
+                        //高度填满
+                        var SCALE = trueHeight / naturalHeight;
+                        var marginLeft = 0;
+                        var marginTop = (trueWidth - naturalWidth * SCALE) / 2;
+                    } else {
+                        //宽度填满
+                        var SCALE = trueWidth / naturalWidth;
+                        var marginLeft = (trueHeight - naturalHeight * SCALE) / 2;
+                        var marginTop = 0;
+                    }
+
+                    return [(pos[1] - marginTop) / SCALE, naturalHeight - (pos[0] - marginLeft) / SCALE];
+                } else {
+                    //设备横向
+                    var trueWidth = window.innerWidth;
+                    var trueHeight = window.innerHeight;
+
+                    if (trueHeight / naturalHeight < trueWidth / naturalWidth) {
+                        //高度填满
+                        var SCALE = trueHeight / naturalHeight;
+                        var marginTop = 0;
+                        var marginLeft = (trueWidth - naturalWidth * SCALE) / 2;
+                    } else {
+                        //宽度填满
+                        var SCALE = trueWidth / naturalWidth;
+                        var marginTop = (trueHeight - naturalHeight * SCALE) / 2;
+                        var marginLeft = 0;
+                    }
+
+                    return [(pos[0] - marginLeft) / SCALE, (pos[1] - marginTop) / SCALE];
+                }
+            }
+
+            function touchDown(e) {
+                e.preventDefault();
+
+                var position = new Array(2);
+                for (var i = 0; i < e.changedTouches.length; i++) {
+                    position = posMapping([e.changedTouches[i].pageX, e.changedTouches[i].pageY]);
+                    sendMessage("start", i, position);
+                }
+
+                clearTimer();
+            }
+
+            function touchup(e) {
+                var position = new Array(2);
+                for (var i = 0; i < e.changedTouches.length; i++) {
+                    position = posMapping([e.changedTouches[i].pageX, e.changedTouches[i].pageY]);
+                    sendMessage("end", i, position);
+                }
+
+                if (e.touches.length == 0) {
+                    closeAlert();
+                }
+            }
+
+            function throttle(fn, delay) {
+                var flag = true;
+                return function() {
+                    if (!flag) {
+                        return;
+                    }
+                    flag = false;
+                    var context = this,
+                        args = arguments;
+                    setTimeout(function() {
+                        fn.apply(context, args);
+                        flag = true;
+                    }, delay);
+                };
+            }
+
+            function openWebSocket(ip, port, token) {
+                var socketUrl = "ws://" + ip + ":" + port;
+                // socketUrl = "ws://10.47.222.153:10040"; //TODO
+                socketUrl_send = socketUrl + "/input/?authtoken=" + token;
+                socketUrl_recieve = socketUrl + "/image/?authtoken=" + token;
+                ws = new WebSocket(socketUrl_send); //建立WebSocket
+                console.log("连接中...");
+                ws.onopen = function() {
+                    console.log(ws.readyState);
+                    if (ws.readyState == 1) {
+                        ws_mes = new WebSocket(socketUrl_recieve);
+                        ws_mes.onopen = function() {
+                            //事件：WebSocket打开
+                            console.log("连接成功");
+                            ws_mes.onmessage = recieveMessage; //事件：接收到服务端消息
+                            closeAlert();
+                        };
+                    }
+                };
+            }
+
+            function sendMessage(method, index, pos) {
+                var buffer = new ArrayBuffer(130);
+                var view = new DataView(buffer);
+
+                view.setUint8(0, 0); //subCmdId
+                view.setUint8(1, 24); //datalen 4*6=24
+                view.setUint32(2, 10001, true); //msg_id
+                view.setUint32(6, 16, true); //length
+                view.setUint32(10, index, true); //touchid
+                view.setUint32(14, checkStatus(method), true); //status
+                view.setUint32(18, pos[0], true); //posX
+                view.setUint32(22, pos[1], true); //posY
+
+                ws.send(buffer); //向服务端发送消息
+            }
+
+            function recieveMessage(e) {
+                URL.revokeObjectURL(blobURL);
+
+                var reader = new FileReader();
+                reader.readAsArrayBuffer(e.data.slice(0, 1));
+                reader.onload = function() {
+                    var view = new DataView(reader.result);
+                    var closeTip = view.getUint8(0);
+                    console.log(closeTip);
+                    if (closeTip == 2) {
+                        closer();
+                    }
+                };
+
+                blobURL = URL.createObjectURL(e.data.slice(8));
+                document.querySelector("#game-shot").src = blobURL;
+                document.querySelector("#game-shot").onload = function() {
+                    if (firstTimeFlag == true) {
+                        naturalHeight = document.querySelector("#game-shot").naturalHeight;
+                        naturalWidth = document.querySelector("#game-shot").naturalWidth;
+                        firstTimeFlag = false;
+                    }
+                };
+            }
+
+            function checkStatus(method) {
+                switch (method) {
+                    case "start":
+                        return "0";
+                        break;
+                    case "move":
+                        return "2";
+                        break;
+                    case "end":
+                        return "1";
+                }
+            }
+
+            function closer() {
+                ws.close();
+                ws_mes.close();
+                document.querySelector("#tip").innerText = "连接已断开，请刷新以重新连接。";
+                document.querySelector("#game-shot").src = "./assets/test.jpg";
+
+                document.querySelector(".container").removeEventListener("touchstart", touchDown);
+                document.querySelector(".container").removeEventListener("touchmove", throttle(posCatching, 100));
+                document.querySelector(".container").removeEventListener("touchend", touchup);
+            }
+
+            function getQueryVariable(variable) {
+                var query = window.location.search.substring(1);
+                var vars = query.split("&");
+                for (var i = 0; i < vars.length; i++) {
+                    var pair = vars[i].split("=");
+                    if (pair[0] == variable) {
+                        return pair[1];
+                    }
+                }
+                return 0;
+            }
+
+            function closeAlert() {
+                timer = setTimeout(() => {
+                    document.querySelector("#tip").innerText = "连接即将关闭…";
+                    closerTimer = setTimeout(() => {
+                        closer();
+                    }, 30000);
+                }, 270000);
+            }
+
+            function clearTimer() {
+                clearTimeout(timer);
+                clearTimeout(closerTimer);
+                var tip = document.querySelector("#tip")
+                if(tip.innerText != ""){
+                    tip.innerText = "";
+                }                
+            }
+        </script>
+    </body>
+</html>
